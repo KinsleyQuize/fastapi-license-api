@@ -4,7 +4,7 @@ import json
 import os
 
 app = FastAPI()
-KEYS_FILE = "keys.json"
+KEYS_FILE = r"C:\Users\kriac\OneDrive\Рабочий стол\server\keys.json"
 LOG_FILE = "logs.txt"
 
 if os.path.exists(KEYS_FILE):
