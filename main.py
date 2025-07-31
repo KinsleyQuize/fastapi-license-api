@@ -7,7 +7,6 @@ app = FastAPI()
 KEYS_FILE = "keys.json"
 LOG_FILE = "logs.txt"
 
-# Загрузка ключей или инициализация
 if os.path.exists(KEYS_FILE):
     with open(KEYS_FILE, "r") as f:
         keys_db = json.load(f)
@@ -21,6 +20,7 @@ else:
 def save_keys_db():
     with open(KEYS_FILE, "w") as f:
         json.dump(keys_db, f, indent=4)
+    print(f"[{datetime.now()}] keys.json обновлён")
 
 @app.post("/check_key")
 async def check_key(request: Request):
@@ -37,15 +37,16 @@ async def check_key(request: Request):
 
     key_data = keys_db[key]
 
-    # Проверка HWID
     if key_data["hwid"]:
         if key_data["hwid"] != hwid:
             log = f"[{now}] ❌ HWID не совпадает: {key} | HWID: {hwid}\n"
             with open(LOG_FILE, "a") as f:
                 f.write(log)
             return {"status": "error", "message": "Ключ уже используется на другом устройстве"}
+        else:
+            # Здесь можно обновлять дату последнего запроса, если хочешь
+            save_keys_db()
     else:
-        # Если ключ не активирован — привязываем к HWID и ставим дату активации
         key_data["hwid"] = hwid
         key_data["activated"] = now.strftime("%Y-%m-%d %H:%M:%S")
         save_keys_db()
