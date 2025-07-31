@@ -1,26 +1,43 @@
 from fastapi import FastAPI, Request
 from datetime import datetime, timedelta
-import json
+import asyncpg
+import asyncio
 import os
 
 app = FastAPI()
-KEYS_FILE = r"C:\Users\kriac\OneDrive\Рабочий стол\server\keys.json"
+
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://license_db_hjw3_user:oDtnt6T5oqlyAxjOfiemgMFQAzARkoBx@dpg-d25r703e5dus73abmra0-a.postgres.render.com/license_db_hjw3?sslmode=require"
+
 LOG_FILE = "logs.txt"
 
-if os.path.exists(KEYS_FILE):
-    with open(KEYS_FILE, "r") as f:
-        keys_db = json.load(f)
-else:
-    keys_db = {
-        "5FphhRQmyWWTRgMl5PfYQ": {"days": 7, "hwid": None, "activated": None},
-        "oiGQTaSktgAmARQCdSxQo": {"days": 30, "hwid": None, "activated": None},
-        "GFwlF6hsZ3eXu2NuZv2Zg": {"days": 999999, "hwid": None, "activated": None},
-    }
+# Инициализация подключения к базе (будет создана при старте)
+db_pool = None
 
-def save_keys_db():
-    with open(KEYS_FILE, "w") as f:
-        json.dump(keys_db, f, indent=4)
-    print(f"[{datetime.now()}] keys.json обновлён")
+async def insert_initial_licenses():
+    keys = [
+        ("5FphhRQmyWWTRgMl5PfYQ", 7),
+        ("oiGQTaSktgAmARQCdSxQo", 30),
+        ("GFwlF6hsZ3eXu2NuZv2Zg", 999999),
+    ]
+    async with db_pool.acquire() as conn:
+        for key, days in keys:
+            exists = await conn.fetchval("SELECT 1 FROM licenses WHERE license_key=$1", key)
+            if not exists:
+                await conn.execute(
+                    "INSERT INTO licenses (license_key, days, hwid, activated) VALUES ($1, $2, NULL, NULL)",
+                    key, days
+                )
+        print("[INFO] Initial license keys inserted or already exist.")
+
+@app.on_event("startup")
+async def startup():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    await insert_initial_licenses()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await db_pool.close()
 
 @app.post("/check_key")
 async def check_key(request: Request):
@@ -29,40 +46,49 @@ async def check_key(request: Request):
     hwid = data.get("hwid")
     now = datetime.now()
 
-    if key not in keys_db:
-        log = f"[{now}] ❌ Неверный ключ: {key}\n"
-        with open(LOG_FILE, "a") as f:
-            f.write(log)
-        return {"status": "error", "message": "Неверный ключ"}
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM licenses WHERE license_key=$1", key)
 
-    key_data = keys_db[key]
-
-    if key_data["hwid"]:
-        if key_data["hwid"] != hwid:
-            log = f"[{now}] ❌ HWID не совпадает: {key} | HWID: {hwid}\n"
+        if not row:
+            log = f"[{now}] ❌ Неверный ключ: {key}\n"
             with open(LOG_FILE, "a") as f:
                 f.write(log)
-            return {"status": "error", "message": "Ключ уже используется на другом устройстве"}
+            return {"status": "error", "message": "Неверный ключ"}
+
+        # Проверка HWID
+        db_hwid = row["hwid"]
+        activated = row["activated"]
+        days = row["days"]
+
+        if db_hwid:
+            if db_hwid != hwid:
+                log = f"[{now}] ❌ HWID не совпадает: {key} | HWID: {hwid}\n"
+                with open(LOG_FILE, "a") as f:
+                    f.write(log)
+                return {"status": "error", "message": "Ключ уже используется на другом устройстве"}
         else:
-            # Здесь можно обновлять дату последнего запроса, если хочешь
-            save_keys_db()
-    else:
-        key_data["hwid"] = hwid
-        key_data["activated"] = now.strftime("%Y-%m-%d %H:%M:%S")
-        save_keys_db()
+            # Привязываем HWID и дату активации
+            activated_str = now.strftime("%Y-%m-%d %H:%M:%S")
+            await conn.execute(
+                "UPDATE licenses SET hwid=$1, activated=$2 WHERE license_key=$3",
+                hwid, activated_str, key
+            )
+            activated = now
 
-    activated = datetime.strptime(key_data["activated"], "%Y-%m-%d %H:%M:%S")
-    expires = activated + timedelta(days=key_data["days"])
-    days_left = (expires - now).days
+        if isinstance(activated, str):
+            activated = datetime.strptime(activated, "%Y-%m-%d %H:%M:%S")
 
-    if now > expires:
-        log = f"[{now}] ❌ Ключ просрочен: {key} | HWID: {hwid}\n"
+        expires = activated + timedelta(days=days)
+        days_left = (expires - now).days
+
+        if now > expires:
+            log = f"[{now}] ❌ Ключ просрочен: {key} | HWID: {hwid}\n"
+            with open(LOG_FILE, "a") as f:
+                f.write(log)
+            return {"status": "error", "message": "Срок действия ключа истёк"}
+
+        log = f"[{now}] ✅ Успешная активация: {key} | HWID: {hwid} | Осталось дней: {days_left}\n"
         with open(LOG_FILE, "a") as f:
             f.write(log)
-        return {"status": "error", "message": "Срок действия ключа истёк"}
 
-    log = f"[{now}] ✅ Успешная активация: {key} | HWID: {hwid} | Осталось дней: {days_left}\n"
-    with open(LOG_FILE, "a") as f:
-        f.write(log)
-
-    return {"status": "success", "days_left": days_left}
+        return {"status": "success", "days_left": days_left}
