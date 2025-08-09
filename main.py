@@ -1,55 +1,72 @@
-from fastapi import FastAPI, Request
+from flask import Flask, request, jsonify
+import mysql.connector
 from datetime import datetime, timedelta
-import json
 import os
 
-app = FastAPI()
-KEYS_FILE = "keys.json"
-LOG_FILE = "logs.txt"
+app = Flask(__name__)
 
-# Загрузка ключей
-if os.path.exists(KEYS_FILE):
-    with open(KEYS_FILE, "r") as f:
-        keys_db = json.load(f)
-else:
-    keys_db = {
-        "5FphhRQmyWWTRgMl5PfYQ": {"days": 7, "hwid": None, "activated": None},
-        "oiGQTaSktgAmARQCdSxQo": {"days": 30, "hwid": None, "activated": None},
-        "GFwlF6hsZ3eXu2NuZv2Zg": {"days": 999999, "hwid": None, "activated": None},
-    }
+# Подключение к базе — берем параметры из переменных окружения Render
+db_config = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', ''),
+    'database': os.getenv('DB_NAME', 'license_system'),
+    'port': int(os.getenv('DB_PORT', 3306))
+}
 
-@app.post("/check_key")
-async def check_key(request: Request):
-    data = await request.json()
-    key = data.get("license_key")
-    hwid = data.get("hwid")
-    now = datetime.now()
+def get_db_connection():
+    return mysql.connector.connect(**db_config)
 
-    if key not in keys_db:
-        log = f"[{now}] ❌ Неверный ключ: {key}\n"
-        with open(LOG_FILE, "a") as f: f.write(log)
-        return {"status": "error", "message": "Неверный ключ"}
+@app.route('/check_key', methods=['POST'])
+def check_key():
+    data = request.json
+    license_key = data.get('license_key')
+    hwid = data.get('hwid')
 
-    key_data = keys_db[key]
-    if key_data["hwid"] and key_data["hwid"] != hwid:
-        log = f"[{now}] ❌ HWID не совпадает: {key} | HWID: {hwid}\n"
-        with open(LOG_FILE, "a") as f: f.write(log)
-        return {"status": "error", "message": "Ключ уже используется на другом устройстве"}
+    if not license_key:
+        return jsonify({'error': 'license_key required'}), 400
 
-    if not key_data["activated"]:
-        key_data["hwid"] = hwid
-        key_data["activated"] = now.strftime("%Y-%m-%d %H:%M:%S")
-        with open(KEYS_FILE, "w") as f: json.dump(keys_db, f, indent=4)
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
 
-    activated = datetime.strptime(key_data["activated"], "%Y-%m-%d %H:%M:%S")
-    expires = activated + timedelta(days=key_data["days"])
-    days_left = (expires - now).days
+    cursor.execute("SELECT * FROM licenses WHERE license_key = %s", (license_key,))
+    row = cursor.fetchone()
 
-    if now > expires:
-        log = f"[{now}] ❌ Ключ просрочен: {key} | HWID: {hwid}\n"
-        with open(LOG_FILE, "a") as f: f.write(log)
-        return {"status": "error", "message": "Срок действия ключа истёк"}
+    if not row:
+        cursor.close()
+        conn.close()
+        return jsonify({'valid': False, 'message': 'Invalid license key'}), 404
 
-    log = f"[{now}] ✅ Успешная активация: {key} | HWID: {hwid} | Осталось дней: {days_left}\n"
-    with open(LOG_FILE, "a") as f: f.write(log)
-    return {"status": "success", "days_left": days_left}
+    activated_at = row['activated_at']
+    days = row['days']
+
+    if activated_at:
+        expired_at = activated_at + timedelta(days=days)
+        if datetime.utcnow() > expired_at:
+            cursor.close()
+            conn.close()
+            return jsonify({'valid': False, 'message': 'License expired'}), 403
+
+    if not row['hwid'] and hwid:
+        cursor.execute(
+            "UPDATE licenses SET hwid = %s, activated_at = %s WHERE license_key = %s",
+            (hwid, datetime.utcnow(), license_key)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({'valid': True, 'message': 'Activated successfully'})
+
+    if row['hwid'] and row['hwid'] != hwid:
+        cursor.close()
+        conn.close()
+        return jsonify({'valid': False, 'message': 'HWID mismatch'}), 403
+
+    cursor.close()
+    conn.close()
+    return jsonify({'valid': True, 'message': 'License valid'})
+
+if __name__ == '__main__':
+    # Для Render нужно использовать порт из переменной окружения
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
