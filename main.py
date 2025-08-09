@@ -9,7 +9,7 @@ app = Flask(__name__)
 db_config = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', ''),
+    'password': os.getenv('DB_PASSWORD', 'wVAjqLiUofKWDLWS@2 '),
     'database': os.getenv('DB_NAME', 'license_system'),
     'port': int(os.getenv('DB_PORT', 3306))
 }
