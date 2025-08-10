@@ -1,22 +1,19 @@
 # Используем официальный Python образ
 FROM python:3.11-slim
 
-# Устанавливаем рабочую директорию в контейнере
+# Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# Копируем файлы requirements.txt и main.py в контейнер
+# Копируем файлы зависимостей и устанавливаем их
 COPY requirements.txt .
-COPY main.py .
 
-# Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем переменные окружения (можно задать в Render UI)
-ENV FLASK_APP=main.py
-ENV FLASK_RUN_HOST=0.0.0.0
+# Копируем все файлы проекта в контейнер
+COPY . .
 
-# Открываем порт (Render читает этот порт из переменной PORT)
-EXPOSE 5000
+# Пробрасываем порт, на котором будет работать uvicorn
+EXPOSE 8000
 
-# Команда запуска Flask-сервера
-CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]
+# Команда запуска uvicorn с нужными параметрами
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
