@@ -1,7 +1,6 @@
 fastapi
 uvicorn[standard]
 requests
-pywin32
 keyboard
 pyautogui
 psutil
