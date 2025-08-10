@@ -12,7 +12,7 @@ class LicenseCheckRequest(BaseModel):
 
 # Настройки подключения к БД из env или по умолчанию
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
+    'host': os.getenv('DB_HOST', '188.188.23.236'),
     'user': os.getenv('DB_USER', 'root'),
     'password': os.getenv('DB_PASSWORD', 'wVAjqLiUofKWDLWS@2 '),
     'database': os.getenv('DB_NAME', 'licenses_db'),
